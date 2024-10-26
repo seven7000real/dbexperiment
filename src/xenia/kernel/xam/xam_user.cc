@@ -26,6 +26,38 @@ namespace xe {
 namespace kernel {
 namespace xam {
 
+dword_result_t XamProfileOpen_entry(qword_t xuid, lpstring_t mount_name) {
+  std::string guest_name = mount_name;
+  bool result = kernel_state()->xam_state()->GetUserProfile(xuid);
+
+  if (!result) {
+    return X_ERROR_FUNCTION_FAILED;
+  }
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XamProfileOpen, kUserProfiles, kStub);
+
+struct X_PROFILEENUMRESULT {
+  xe::be<uint64_t> xuid_offline;  // E0.....
+  X_XAMACCOUNTINFO account;
+  xe::be<uint32_t> device_id;
+};
+static_assert_size(X_PROFILEENUMRESULT, 0x188);
+
+dword_result_t XamProfileCreateEnumerator_entry(dword_t device_id,
+                                                lpdword_t handle_out) {
+  assert_not_null(handle_out);
+
+  auto e = new XStaticUntypedEnumerator(kernel_state(), 0,
+                                        sizeof(X_PROFILEENUMRESULT));
+
+  e->Initialize(0xFF, 0xFF, 0x23001, 0x23003, 0x28);
+
+  *handle_out = e->handle();
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XamProfileCreateEnumerator, kUserProfiles, kStub);
+
 X_HRESULT_result_t XamUserGetXUID_entry(dword_t user_index, dword_t type_mask,
                                         lpqword_t xuid_ptr) {
   assert_true(type_mask == 1 || type_mask == 2 || type_mask == 3 ||
@@ -64,27 +96,6 @@ X_HRESULT_result_t XamUserGetXUID_entry(dword_t user_index, dword_t type_mask,
   return result;
 }
 DECLARE_XAM_EXPORT1(XamUserGetXUID, kUserProfiles, kImplemented);
-
-dword_result_t XamUserGetIndexFromXUID_entry(qword_t xuid, dword_t flags,
-                                             pointer_t<uint32_t> index) {
-  if (!index) {
-    return X_E_INVALIDARG;
-  }
-
-  const uint8_t user_index = kernel_state()
-                                 ->xam_state()
-                                 ->profile_manager()
-                                 ->GetUserIndexAssignedToProfile(xuid);
-
-  if (user_index == XUserIndexAny) {
-    return X_E_NO_SUCH_USER;
-  }
-
-  *index = user_index;
-
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamUserGetIndexFromXUID, kUserProfiles, kImplemented);
 
 dword_result_t XamUserGetSigninState_entry(dword_t user_index) {
   // Yield, as some games spam this.
@@ -139,57 +150,46 @@ X_HRESULT_result_t XamUserGetSigninInfo_entry(
 }
 DECLARE_XAM_EXPORT1(XamUserGetSigninInfo, kUserProfiles, kImplemented);
 
-dword_result_t XamUserGetName_entry(dword_t user_index, dword_t buffer,
+dword_result_t XamUserGetName_entry(dword_t user_index, lpstring_t buffer,
                                     dword_t buffer_len) {
   if (user_index >= XUserMaxUserCount) {
     return X_ERROR_INVALID_PARAMETER;
   }
 
-  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-    // Based on XAM only first byte is cleared in case of lack of user.
-    kernel_memory()->Zero(buffer, 1);
+  if (kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
+    const auto& user_profile =
+        kernel_state()->xam_state()->GetUserProfile(user_index);
+    const auto& user_name = user_profile->name();
+    xe::string_util::copy_truncating(
+        buffer, user_name, std::min(buffer_len.value(), uint32_t(16)));
+  } else {
+    *buffer = 0;
     return X_ERROR_NO_SUCH_USER;
   }
-
-  const auto& user_profile =
-      kernel_state()->xam_state()->GetUserProfile(user_index);
-
-  // Because name is always limited to 15 characters we can assume length will
-  // never exceed that limit.
-  const auto& user_name = user_profile->name();
-
-  // buffer_len includes null-terminator. user_name does not.
-  const uint32_t bytes_to_copy = std::min(
-      buffer_len.value(), static_cast<uint32_t>(user_name.length()) + 1);
-
-  char* str_buffer = kernel_memory()->TranslateVirtual<char*>(buffer);
-  xe::string_util::copy_truncating(str_buffer, user_name, bytes_to_copy);
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamUserGetName, kUserProfiles, kImplemented);
 
-dword_result_t XamUserGetGamerTag_entry(dword_t user_index, dword_t buffer,
+dword_result_t XamUserGetGamerTag_entry(dword_t user_index,
+                                        lpu16string_t buffer,
                                         dword_t buffer_len) {
-  if (!buffer || buffer_len < 16) {
-    return X_E_INVALIDARG;
-  }
-
   if (user_index >= XUserMaxUserCount) {
     return X_E_INVALIDARG;
   }
 
+  if (!buffer || buffer_len < 16) {
+    return X_E_INVALIDARG;
+  }
+
   if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-    return X_ERROR_NO_SUCH_USER;
+    return X_E_INVALIDARG;
   }
 
   const auto& user_profile =
       kernel_state()->xam_state()->GetUserProfile(user_index);
   auto user_name = xe::to_utf16(user_profile->name());
-
-  char16_t* str_buffer = kernel_memory()->TranslateVirtual<char16_t*>(buffer);
-
   xe::string_util::copy_and_swap_truncating(
-      str_buffer, user_name, std::min(buffer_len.value(), uint32_t(16)));
+      buffer, user_name, std::min(buffer_len.value(), uint32_t(16)));
   return X_E_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamUserGetGamerTag, kUserProfiles, kImplemented);
@@ -423,7 +423,7 @@ dword_result_t XamUserWriteProfileSettings_entry(
         "XamUserWriteProfileSettings: setting index [{}]:"
         " from={} setting_id={:08X} data.type={}",
         n, (uint32_t)setting.from, (uint32_t)setting.setting_id,
-        static_cast<uint32_t>(setting.data.type));
+        setting.data.type);
 
     switch (setting_type) {
       case X_USER_DATA_TYPE::CONTENT:
@@ -456,7 +456,7 @@ dword_result_t XamUserWriteProfileSettings_entry(
       case X_USER_DATA_TYPE::DATETIME:
       default: {
         XELOGE("XamUserWriteProfileSettings: Unimplemented data type {}",
-               static_cast<uint32_t>(setting_type));
+               setting_type);
       } break;
     };
   }
@@ -534,6 +534,31 @@ DECLARE_XAM_EXPORT1(XamUserContentRestrictionCheckAccess, kUserProfiles, kStub);
 dword_result_t XamUserIsOnlineEnabled_entry(dword_t user_index) { return 1; }
 DECLARE_XAM_EXPORT1(XamUserIsOnlineEnabled, kUserProfiles, kStub);
 
+dword_result_t XamUserLogon_entry(lpqword_t xuid, dword_t unk,
+                                  dword_t overlapped_ptr) {
+  uint64_t profile_xuid = *xuid;
+
+  auto run = [profile_xuid](uint32_t& extended_error,
+                            uint32_t& length) -> X_RESULT {
+    // kernel_state()->profile_manager()->Login(profile_xuid); // log in to
+    // profile and swap account data
+    extended_error = 0;
+    length = 0;
+    return X_ERROR_SUCCESS;
+  };
+
+  if (overlapped_ptr) {
+    kernel_state()->CompleteOverlappedDeferredEx(run, overlapped_ptr);
+    return X_ERROR_IO_PENDING;
+  } else {
+    uint32_t extended_error;
+    uint32_t item_count;
+    X_RESULT result = run(extended_error, item_count);
+  }
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XamUserLogon, kUserProfiles, kStub);
+
 dword_result_t XamUserGetMembershipTier_entry(dword_t user_index) {
   if (user_index >= XUserMaxUserCount) {
     return X_ERROR_INVALID_PARAMETER;
@@ -542,10 +567,15 @@ dword_result_t XamUserGetMembershipTier_entry(dword_t user_index) {
   if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
     return X_ERROR_NO_SUCH_USER;
   }
-
-  return X_XAMACCOUNTINFO::AccountSubscriptionTier::kSubscriptionTierGold;
+  return 6 /* 6 appears to be Gold */;
 }
 DECLARE_XAM_EXPORT1(XamUserGetMembershipTier, kUserProfiles, kStub);
+
+// https://answers.microsoft.com/en-us/xbox/forum/all/what-does-the-tenure-mean/07793391-78af-4709-b54a-5adf4366be7e
+dword_result_t XamUserGetUserTenure_entry() {
+  return 0xC; /* Development for Xenia Started in 2013 (11 yrs)*/
+}
+DECLARE_XAM_EXPORT1(XamUserGetUserTenure, kUserProfiles, kStub);
 
 dword_result_t XamUserAreUsersFriends_entry(dword_t user_index, dword_t unk1,
                                             dword_t unk2, lpdword_t out_value,
@@ -593,7 +623,7 @@ dword_result_t XamUserAreUsersFriends_entry(dword_t user_index, dword_t unk1,
 DECLARE_XAM_EXPORT1(XamUserAreUsersFriends, kUserProfiles, kStub);
 
 dword_result_t XamUserCreateAchievementEnumerator_entry(
-    dword_t title_id, dword_t user_index, qword_t xuid, dword_t flags,
+    dword_t title_id, dword_t user_index, dword_t xuid, dword_t flags,
     dword_t offset, dword_t count, lpdword_t buffer_size_ptr,
     lpdword_t handle_ptr) {
   if (!count || !buffer_size_ptr || !handle_ptr) {
@@ -620,36 +650,32 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
     return result;
   }
 
-  const auto user = kernel_state()->xam_state()->GetUserProfile(user_index);
-  if (!user) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-
-  uint64_t requester_xuid = user->xuid();
-  if (xuid) {
-    requester_xuid = xuid;
-  }
-
   const util::XdbfGameData db = kernel_state()->title_xdbf();
-  uint32_t title_id_ =
-      title_id ? static_cast<uint32_t>(title_id) : kernel_state()->title_id();
 
-  const auto user_title_achievements =
-      kernel_state()->achievement_manager()->GetTitleAchievements(
-          requester_xuid, title_id_);
+  if (db.is_valid()) {
+    const XLanguage language =
+        db.GetExistingLanguage(static_cast<XLanguage>(cvars::user_language));
+    const std::vector<util::XdbfAchievementTableEntry> achievement_list =
+        db.GetAchievements();
 
-  if (user_title_achievements) {
-    for (const auto& entry : *user_title_achievements) {
+    for (const util::XdbfAchievementTableEntry& entry : achievement_list) {
+      auto is_unlocked =
+          kernel_state()->achievement_manager()->IsAchievementUnlocked(
+              entry.id);
+      auto unlock_time =
+          kernel_state()->achievement_manager()->GetAchievementUnlockTime(
+              entry.id);
+
       auto item = XAchievementEnumerator::AchievementDetails{
-          entry.achievement_id,
-          xe::load_and_swap<std::u16string>(entry.achievement_name.c_str()),
-          xe::load_and_swap<std::u16string>(entry.unlocked_description.c_str()),
-          xe::load_and_swap<std::u16string>(entry.locked_description.c_str()),
+          entry.id,
+          xe::to_utf16(db.GetStringTableEntry(language, entry.label_id)),
+          xe::to_utf16(db.GetStringTableEntry(language, entry.description_id)),
+          xe::to_utf16(db.GetStringTableEntry(language, entry.unachieved_id)),
           entry.image_id,
           entry.gamerscore,
-          entry.unlock_time.high_part,
-          entry.unlock_time.low_part,
-          entry.flags};
+          (uint32_t)(unlock_time << 31),
+          (uint32_t)unlock_time,
+          is_unlocked ? entry.flags | 0x20000 : entry.flags};
 
       e->AppendItem(item);
     }
@@ -660,27 +686,6 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
 }
 DECLARE_XAM_EXPORT1(XamUserCreateAchievementEnumerator, kUserProfiles,
                     kSketchy);
-
-dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
-    dword_t title_id, dword_t user_index, qword_t xuid, dword_t starting_index,
-    dword_t game_count, lpdword_t buffer_size_ptr, lpdword_t handle_ptr) {
-  if (user_index >= XUserMaxUserCount && game_count != 0 && !buffer_size_ptr &&
-      !handle_ptr) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-
-  // auto e = new XStaticEnumerator<X_XDBF_GPD_TITLEPLAYED>(kernel_state(),
-  // game_count); auto result = e->Initialize(user_index, 0xFB, 0xB0050,
-  // 0xB000B, 0x20, game_count, 0);
-
-  XELOGD("XamUserCreateTitlesPlayedEnumerator: Stubbed");
-
-  return X_ERROR_FUNCTION_FAILED;
-}
-DECLARE_XAM_EXPORT1(XamUserCreateTitlesPlayedEnumerator, kUserProfiles, kStub);
 
 dword_result_t XamParseGamerTileKey_entry(lpdword_t key_ptr, lpdword_t out1_ptr,
                                           lpdword_t out2_ptr,
@@ -742,62 +747,28 @@ dword_result_t XamSessionRefObjByHandle_entry(dword_t handle,
 }
 DECLARE_XAM_EXPORT1(XamSessionRefObjByHandle, kUserProfiles, kStub);
 
-dword_result_t XamUserIsUnsafeProgrammingAllowed_entry(dword_t user_index,
-                                                       dword_t unk,
-                                                       lpdword_t result_ptr) {
-  if (!result_ptr) {
-    return X_ERROR_INVALID_PARAMETER;
+dword_result_t XamUserIsUnsafeProgrammingAllowed_entry(
+    dword_t unk1, dword_t unk2, lpdword_t unk3, dword_t unk4, dword_t unk5,
+    dword_t unk6) {
+  if (!unk3 || unk1 != 255 && unk1 >= 4) {
+    return 87;
   }
-
-  if (user_index != XUserIndexAny && user_index >= XUserMaxUserCount) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-
-  // uint32_t result = XamUserCheckPrivilege_entry(user_index, 0xD4u,
-  // result_ptr);
-
-  *result_ptr = 1;
-
-  return X_ERROR_SUCCESS;
+  *unk3 = 1;
+  return 0;
 }
 DECLARE_XAM_EXPORT1(XamUserIsUnsafeProgrammingAllowed, kUserProfiles, kStub);
 
 dword_result_t XamUserGetSubscriptionType_entry(dword_t user_index,
-                                                dword_t unk2, dword_t unk3) {
-  if (user_index >= XUserMaxUserCount) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-
-  if (!unk2 || !unk3) {
+                                                dword_t unk2, dword_t unk3,
+                                                dword_t unk4, dword_t unk5,
+                                                dword_t unk6) {
+  if (!unk2 || !unk3 || user_index >= XUserMaxUserCount) {
     return X_E_INVALIDARG;
   }
 
-  return X_ERROR_SUCCESS;
+  return 0;
 }
 DECLARE_XAM_EXPORT1(XamUserGetSubscriptionType, kUserProfiles, kStub);
-
-dword_result_t XamUserGetUserFlags_entry(dword_t user_index) {
-  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-    return 0;
-  }
-
-  const auto& user_profile =
-      kernel_state()->xam_state()->GetUserProfile(user_index);
-
-  return user_profile->GetCachedFlags();
-}
-DECLARE_XAM_EXPORT1(XamUserGetUserFlags, kUserProfiles, kImplemented);
-
-dword_result_t XamUserGetUserFlagsFromXUID_entry(qword_t xuid) {
-  if (!kernel_state()->xam_state()->IsUserSignedIn(xuid)) {
-    return 0;
-  }
-
-  const auto& user_profile = kernel_state()->xam_state()->GetUserProfile(xuid);
-
-  return user_profile->GetCachedFlags();
-}
-DECLARE_XAM_EXPORT1(XamUserGetUserFlagsFromXUID, kUserProfiles, kImplemented);
 
 constexpr uint8_t kStatsMaxAmount = 64;
 
@@ -844,34 +815,17 @@ dword_result_t XamUserCreateStatsEnumerator_entry(
 }
 DECLARE_XAM_EXPORT1(XamUserCreateStatsEnumerator, kUserProfiles, kSketchy);
 
-dword_result_t XamProfileFindAccount_entry(
-    qword_t offline_xuid, pointer_t<X_XAMACCOUNTINFO> account_ptr,
-    lpdword_t device_id) {
-  if (!account_ptr) {
-    return X_ERROR_INVALID_PARAMETER;
+dword_result_t XamProfileClose_entry(lpstring_t mount_name) {
+  std::string guest_name = mount_name;
+  bool result =
+      kernel_state()->file_system()->UnregisterDevice(guest_name + ':');
+
+  if (!result) {
+    return X_ERROR_FUNCTION_FAILED;
   }
-
-  account_ptr.Zero();
-
-  const auto& account =
-      kernel_state()->xam_state()->profile_manager()->GetAccount(offline_xuid);
-
-  if (!account) {
-    return X_ERROR_NO_SUCH_USER;
-  }
-
-  std::memcpy(account_ptr, &account, sizeof(X_XAMACCOUNTINFO));
-
-  xe::string_util::copy_and_swap_truncating(
-      account_ptr->gamertag, account->gamertag, sizeof(account->gamertag));
-
-  if (device_id) {
-    *device_id = 1;
-  }
-
   return X_ERROR_SUCCESS;
 }
-DECLARE_XAM_EXPORT1(XamProfileFindAccount, kUserProfiles, kImplemented);
+DECLARE_XAM_EXPORT1(XamProfileClose, kUserProfiles, kStub);
 
 }  // namespace xam
 }  // namespace kernel
