@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <optional>
 
 #include "xenia/base/platform.h"
 #include "xenia/base/string.h"
