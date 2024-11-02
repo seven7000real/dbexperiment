@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <regex>
 #include <string>
 #include <string_view>
