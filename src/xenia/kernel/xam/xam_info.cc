@@ -27,8 +27,11 @@
 #include "xenia/ui/windowed_app_context.h"
 #include "xenia/xbox.h"
 
+#if XE_PLATFORM_WIN32
+#include "xenia/base/platform_win.h"
+#endif
+
 #include "third_party/fmt/include/fmt/format.h"
-#include "third_party/fmt/include/fmt/xchar.h"
 
 DEFINE_int32(avpack, 8,
              "Video modes\n"
@@ -45,10 +48,6 @@ DEFINE_int32(avpack, 8,
 DECLARE_int32(user_country);
 DECLARE_int32(user_language);
 
-DEFINE_bool(staging_mode, 0,
-            "Enables preview mode in dashboards to render debug information.",
-            "Kernel");
-
 namespace xe {
 namespace kernel {
 namespace xam {
@@ -58,9 +57,6 @@ typedef enum _MODE { KernelMode, UserMode, MaximumMode } MODE;
 
 dword_result_t XamFeatureEnabled_entry(dword_t unk) { return 0; }
 DECLARE_XAM_EXPORT1(XamFeatureEnabled, kNone, kStub);
-
-dword_result_t XamGetStagingMode_entry() { return cvars::staging_mode; }
-DECLARE_XAM_EXPORT1(XamGetStagingMode, kNone, kStub);
 
 // Empty stub schema binary.
 uint8_t schema_bin[] = {
@@ -87,37 +83,51 @@ dword_result_t XamGetOnlineSchema_entry() {
 }
 DECLARE_XAM_EXPORT1(XamGetOnlineSchema, kNone, kImplemented);
 
-void XamFormatDateString_entry(dword_t locale_format, qword_t filetime,
+#if XE_PLATFORM_WIN32
+static SYSTEMTIME xeGetLocalSystemTime(uint64_t filetime) {
+  FILETIME t;
+  t.dwHighDateTime = filetime >> 32;
+  t.dwLowDateTime = (uint32_t)filetime;
+
+  SYSTEMTIME st;
+  SYSTEMTIME local_st;
+  FileTimeToSystemTime(&t, &st);
+  SystemTimeToTzSpecificLocalTime(NULL, &st, &local_st);
+  return local_st;
+}
+#endif
+
+void XamFormatDateString_entry(dword_t unk, qword_t filetime,
                                lpvoid_t output_buffer, dword_t output_count) {
-  output_buffer.Zero(output_count * sizeof(char16_t));
+  std::memset(output_buffer, 0, output_count * sizeof(char16_t));
 
-  auto tp = xe::chrono::WinSystemClock::to_sys(
-      xe::chrono::WinSystemClock::from_file_time(filetime));
-  auto dp = date::floor<date::days>(tp);
-  auto year_month_day = date::year_month_day{dp};
-
-  auto str = fmt::format(u"{:02d}/{:02d}/{}",
-                         static_cast<unsigned>(year_month_day.month()),
-                         static_cast<unsigned>(year_month_day.day()),
-                         static_cast<int>(year_month_day.year()));
+// TODO: implement this for other platforms
+#if XE_PLATFORM_WIN32
+  auto st = xeGetLocalSystemTime(filetime);
+  // TODO: format this depending on users locale?
+  auto str = fmt::format(u"{:02d}/{:02d}/{}", st.wMonth, st.wDay, st.wYear);
   xe::string_util::copy_and_swap_truncating(output_buffer.as<char16_t*>(), str,
                                             output_count);
+#else
+  assert_always();
+#endif
 }
 DECLARE_XAM_EXPORT1(XamFormatDateString, kNone, kImplemented);
 
 void XamFormatTimeString_entry(dword_t unk, qword_t filetime,
                                lpvoid_t output_buffer, dword_t output_count) {
-  output_buffer.Zero(output_count * sizeof(char16_t));
+  std::memset(output_buffer, 0, output_count * sizeof(char16_t));
 
-  auto tp = xe::chrono::WinSystemClock::to_sys(
-      xe::chrono::WinSystemClock::from_file_time(filetime));
-  auto dp = date::floor<date::days>(tp);
-  auto time = date::hh_mm_ss{date::floor<std::chrono::milliseconds>(tp - dp)};
-
-  auto str = fmt::format(u"{:02d}:{:02d}", time.hours().count(),
-                         time.minutes().count());
+// TODO: implement this for other platforms
+#if XE_PLATFORM_WIN32
+  auto st = xeGetLocalSystemTime(filetime);
+  // TODO: format this depending on users locale?
+  auto str = fmt::format(u"{:02d}:{:02d}", st.wHour, st.wMinute);
   xe::string_util::copy_and_swap_truncating(output_buffer.as<char16_t*>(), str,
                                             output_count);
+#else
+  assert_always();
+#endif
 }
 DECLARE_XAM_EXPORT1(XamFormatTimeString, kNone, kImplemented);
 
@@ -248,37 +258,22 @@ uint32_t xeXGetGameRegion() {
 dword_result_t XGetGameRegion_entry() { return xeXGetGameRegion(); }
 DECLARE_XAM_EXPORT1(XGetGameRegion, kNone, kStub);
 
-XLanguage xeGetLanguage(bool extended_languages_support) {
-  auto desired_language = static_cast<XLanguage>(cvars::user_language);
-  uint32_t region = xeXGetGameRegion();
-  auto max_languages = extended_languages_support ? XLanguage::kMaxLanguages
-                                                  : XLanguage::kSChinese;
-  if (desired_language < max_languages) {
-    return desired_language;
-  }
-  if ((region & 0xff00) != 0x100) {
-    return XLanguage::kEnglish;
-  }
-  switch (region) {
-    case 0x101:  // NTSC-J (Japan)
-      return XLanguage::kJapanese;
-    case 0x102:  // NTSC-J (China)
-      return extended_languages_support ? XLanguage::kSChinese
-                                        : XLanguage::kEnglish;
-    default:
-      return XLanguage::kKorean;
-  }
-}
-
 dword_result_t XGetLanguage_entry() {
-  return static_cast<uint32_t>(xeGetLanguage(false));
+  auto desired_language = static_cast<XLanguage>(cvars::user_language);
+
+  // Switch the language based on game region.
+  // TODO(benvanik): pull from xex header.
+  /* uint32_t game_region = XEX_REGION_NTSCU;
+  if (game_region & XEX_REGION_NTSCU) {
+    desired_language = XLanguage::kEnglish;
+  } else if (game_region & XEX_REGION_NTSCJ) {
+    desired_language = XLanguage::kJapanese;
+  }*/
+  // Add more overrides?
+
+  return uint32_t(desired_language);
 }
 DECLARE_XAM_EXPORT1(XGetLanguage, kNone, kImplemented);
-
-dword_result_t XamGetLanguage_entry() {
-  return static_cast<uint32_t>(xeGetLanguage(true));
-}
-DECLARE_XAM_EXPORT1(XamGetLanguage, kNone, kImplemented);
 
 dword_result_t XamGetCurrentTitleId_entry() {
   return kernel_state()->emulator()->title_id();
@@ -333,6 +328,7 @@ dword_result_t XamLoaderGetLaunchDataSize_entry(lpdword_t size_ptr) {
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamLoaderGetLaunchDataSize, kNone, kSketchy);
+
 dword_result_t XamLoaderGetLaunchData_entry(lpvoid_t buffer_ptr,
                                             dword_t buffer_size) {
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
@@ -403,46 +399,9 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
 }
 DECLARE_XAM_EXPORT1(XamLoaderLaunchTitle, kNone, kSketchy);
 
+// https://www.se7ensins.com/forums/threads/interested-in-programming-here-are-some-tips.1503852/
 void XamLoaderLaunchTitleEx_entry(lpstring_t launch_path, lpstring_t mount_path,
-                                  lpstring_t cmdLine, dword_t flags) {
-  auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
-
-  auto& loader_data = xam->loader_data();
-  loader_data.launch_flags = flags;
-
-  // Translate the launch path to a full path.
-  if (launch_path) {
-    auto path = launch_path.value();
-    if (path.empty()) {
-      loader_data.launch_path = "game:\\default.xex";
-    } else {
-      loader_data.launch_path = xe::path_to_utf8(path);
-      loader_data.launch_data_present = true;
-    }
-
-    xam->SaveLoaderData();
-
-    if (loader_data.launch_data_present) {
-      auto display_window = kernel_state()->emulator()->display_window();
-      auto imgui_drawer = kernel_state()->emulator()->imgui_drawer();
-
-      if (display_window && imgui_drawer) {
-        display_window->app_context().CallInUIThreadSynchronous(
-            [imgui_drawer]() {
-              xe::ui::ImGuiDialog::ShowMessageBox(
-                  imgui_drawer, "Title was restarted",
-                  "Title closed with new launch data. \nPlease restart Xenia. "
-                  "Game will be loaded automatically.");
-            });
-      }
-    }
-  } else {
-    assert_always("Game requested exit to dashboard via XamLoaderLaunchTitleEx");
-  }
-  if (loader_data.launch_data_present) {
-    loader_data.launch_path = "game:\\dash.xex";
-  }
-}
+                                  lpstring_t cmdLine, dword_t flags) {}
 DECLARE_XAM_EXPORT1(XamLoaderLaunchTitleEx, kNone, kSketchy);
 
 void XamLoaderTerminateTitle_entry() {
