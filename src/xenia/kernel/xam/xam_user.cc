@@ -20,76 +20,11 @@
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
 
-#include <src/xenia/kernel/xam/xam_enum.cc>
-
 DECLARE_int32(user_language);
 
 namespace xe {
 namespace kernel {
 namespace xam {
-
-dword_result_t XamProfileOpen_entry(qword_t xuid, lpstring_t mount_name) {
-  std::string guest_name = mount_name;
-  bool result =
-      kernel_state()->xam_state()->profile_manager()->GetProfile(xuid);
-
-  if (!result) {
-    return X_ERROR_FUNCTION_FAILED;
-  }
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamProfileOpen, kUserProfiles, kStub);
-
-struct X_PROFILEENUMRESULT {
-  xe::be<uint64_t> xuid_offline;  // E0.....
-  X_XAMACCOUNTINFO account;
-  xe::be<uint32_t> device_id;
-};
-static_assert_size(X_PROFILEENUMRESULT, 0x188);
-
-dword_result_t XamProfileCreateEnumerator_entry(dword_t device_id,
-                                                lpdword_t handle_ptr) {
-  if (!handle_ptr) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-
-  auto e = new XStaticEnumerator<X_PROFILEENUMRESULT>(kernel_state(), 1);
-
-  auto result = e->Initialize(XUserIndexAny, 0xFE, 0x23001, 0x23003, 0);
-
-  if (XFAILED(result)) {
-    return result;
-  }
-
-  const auto& profiles =
-      kernel_state()->xam_state()->profile_manager()->GetProfiles();
-
-  for (const auto& [xuid, account] : *profiles) {
-    X_PROFILEENUMRESULT* profile = e->AppendItem();
-
-    profile->xuid_offline = xuid;
-    profile->device_id = 1;
-    memcpy(&profile->account, &account, sizeof(X_XAMACCOUNTINFO));
-
-    xe::string_util::copy_and_swap_truncating(
-        profile->account.gamertag, account.gamertag, sizeof(account.gamertag));
-  }
-
-  *handle_ptr = e->handle();
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamProfileCreateEnumerator, kNone, kImplemented);
-
-dword_result_t XamProfileEnumerate_entry(dword_t handle, dword_t flags,
-                                         lpvoid_t buffer,
-                                         pointer_t<XAM_OVERLAPPED> overlapped) {
-  uint32_t dummy = 0;
-  auto result = xeXamEnumerate(handle, flags, buffer, 0,
-                               !overlapped ? &dummy : nullptr, overlapped);
-
-  return result;
-}
-DECLARE_XAM_EXPORT1(XamProfileEnumerate, kNone, kImplemented);
 
 X_HRESULT_result_t XamUserGetXUID_entry(dword_t user_index, dword_t type_mask,
                                         lpqword_t xuid_ptr) {
@@ -129,24 +64,6 @@ X_HRESULT_result_t XamUserGetXUID_entry(dword_t user_index, dword_t type_mask,
   return result;
 }
 DECLARE_XAM_EXPORT1(XamUserGetXUID, kUserProfiles, kImplemented);
-
-dword_result_t XamUserGetIndexFromXUID_entry(qword_t xuid, dword_t flags,
-                                             pointer_t<uint32_t> index) {
-  if (!index) {
-    return X_E_INVALIDARG;
-  }
-
-  auto profile_manager = kernel_state()->xam_state()->profile_manager();
-  const uint8_t user_index =
-      profile_manager->GetUserIndexAssignedToProfile(xuid);
-  if (user_index == XUserIndexAny) {
-    return X_E_NO_SUCH_USER;
-  }
-
-  *index = user_index;
-  return X_E_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamUserGetIndexFromXUID, kUserProfiles, kImplemented);
 
 dword_result_t XamUserGetSigninState_entry(dword_t user_index) {
   // Yield, as some games spam this.
@@ -585,79 +502,6 @@ DECLARE_XAM_EXPORT1(XamUserContentRestrictionCheckAccess, kUserProfiles, kStub);
 dword_result_t XamUserIsOnlineEnabled_entry(dword_t user_index) { return 1; }
 DECLARE_XAM_EXPORT1(XamUserIsOnlineEnabled, kUserProfiles, kStub);
 
-// https://github.com/TeaModz/XeLiveStealth-Full-Source/blob/d4a7439ac6241c4a13e883a6f156623d1c08f6eb/XeLive/Utils.cpp#L416
-dword_result_t XamUserLogon_entry(lpqword_t xuids_ptr, dword_t flags,
-                                  pointer_t<XAM_OVERLAPPED> overlapped_ptr) {
-  assert_true(flags == X_USER_LOGON_SIGNIN || flags == X_USER_LOGON_SIGNIN_2 ||
-              flags == X_USER_LOGON_SIGNOUT ||
-              flags == X_USER_LOGON_SIGNOUT_2 ||
-              flags == X_USER_LOGON_SIGNOUT_3);
-
-  if (!xuids_ptr) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-
-  auto run = [xuids_ptr, flags](uint32_t& extended_error,
-                                uint32_t& length) -> X_RESULT {
-    auto const profile_manager = kernel_state()->xam_state()->profile_manager();
-
-    X_STATUS result = X_ERROR_FUNCTION_FAILED;
-
-    for (uint32_t user_index = 0; user_index < XUserMaxUserCount;
-         user_index++) {
-      const uint64_t xuid = xuids_ptr[user_index];
-
-      const bool xuid_entry = xuid;
-
-      if ((flags & X_USER_LOGON_SIGNIN) == X_USER_LOGON_SIGNIN ||
-          (flags & X_USER_LOGON_SIGNIN_2) == X_USER_LOGON_SIGNIN_2) {
-        // XUID available
-        if (xuid_entry) {
-          if (!kernel_state()->xam_state()->IsUserSignedIn(xuid)) {
-            profile_manager->Login(xuid, XUserIndexAny, true);
-          }
-        }
-
-        result = X_ERROR_SUCCESS;
-      } else if ((flags & X_USER_LOGON_SIGNOUT) == X_USER_LOGON_SIGNOUT) {
-        // XUID not available
-        if (!xuid_entry) {
-          if (kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-            profile_manager->Logout(user_index, true);
-          }
-        }
-
-        result = X_ERROR_SUCCESS;
-      } else if ((flags & X_USER_LOGON_SIGNOUT_2) == X_USER_LOGON_SIGNOUT_2 ||
-                 (flags & X_USER_LOGON_SIGNOUT_3) == X_USER_LOGON_SIGNOUT_3) {
-        // XUID available
-        if (kernel_state()->xam_state()->IsUserSignedIn(xuid)) {
-          const uint8_t assigned_index =
-              profile_manager->GetUserIndexAssignedToProfile(xuid);
-
-          profile_manager->Logout(assigned_index, true);
-        }
-
-        result = X_ERROR_SUCCESS;
-      }
-    }
-
-    extended_error = X_HRESULT_FROM_WIN32(result);
-    length = 0;
-
-    return result;
-  };
-
-  if (!overlapped_ptr) {
-    uint32_t extended_error, length = 0;
-    return run(extended_error, length);
-  } else {
-    kernel_state()->CompleteOverlappedDeferredEx(run, overlapped_ptr);
-    return X_ERROR_IO_PENDING;
-  }
-}
-DECLARE_XAM_EXPORT1(XamUserLogon, kUserProfiles, kImplemented);
-
 dword_result_t XamUserGetMembershipTier_entry(dword_t user_index) {
   if (user_index >= XUserMaxUserCount) {
     return X_ERROR_INVALID_PARAMETER;
@@ -669,12 +513,6 @@ dword_result_t XamUserGetMembershipTier_entry(dword_t user_index) {
   return 6 /* 6 appears to be Gold */;
 }
 DECLARE_XAM_EXPORT1(XamUserGetMembershipTier, kUserProfiles, kStub);
-
-// https://answers.microsoft.com/en-us/xbox/forum/all/what-does-the-tenure-mean/07793391-78af-4709-b54a-5adf4366be7e
-dword_result_t XamUserGetUserTenure_entry() {
-  return 0xC; /* Development for Xenia Started in 2013 (11 yrs)*/
-}
-DECLARE_XAM_EXPORT1(XamUserGetUserTenure, kUserProfiles, kStub);
 
 dword_result_t XamUserAreUsersFriends_entry(dword_t user_index, dword_t unk1,
                                             dword_t unk2, lpdword_t out_value,
@@ -786,27 +624,6 @@ dword_result_t XamUserCreateAchievementEnumerator_entry(
 DECLARE_XAM_EXPORT1(XamUserCreateAchievementEnumerator, kUserProfiles,
                     kSketchy);
 
-dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
-    dword_t title_id, dword_t user_index, qword_t xuid, dword_t starting_index,
-    dword_t game_count, lpdword_t buffer_size_ptr, lpdword_t handle_ptr) {
-  if (user_index >= XUserMaxUserCount && game_count != 0 && !buffer_size_ptr &&
-      !handle_ptr) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-  if (!kernel_state()->xam_state()->IsUserSignedIn(user_index)) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-
-  // auto e = new XStaticEnumerator<X_XDBF_GPD_TITLEPLAYED>(kernel_state(),
-  // game_count); auto result = e->Initialize(user_index, 0xFB, 0xB0050,
-  // 0xB000B, 0x20, game_count, 0);
-
-  XELOGD("XamUserCreateTitlesPlayedEnumerator: Stubbed");
-
-  return X_ERROR_FUNCTION_FAILED;
-}
-DECLARE_XAM_EXPORT1(XamUserCreateTitlesPlayedEnumerator, kUserProfiles, kStub);
-
 dword_result_t XamParseGamerTileKey_entry(lpdword_t key_ptr, lpdword_t out1_ptr,
                                           lpdword_t out2_ptr,
                                           lpdword_t out3_ptr) {
@@ -816,50 +633,6 @@ dword_result_t XamParseGamerTileKey_entry(lpdword_t key_ptr, lpdword_t out1_ptr,
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamParseGamerTileKey, kUserProfiles, kStub);
-
-// https://github.com/xenia-canary/xenia-canary/blob/new_dashboard_run/src/xenia/kernel/xam/xam_user.cc
-dword_result_t XamReadTile_entry(dword_t tile_type, dword_t title_id,
-                                 qword_t tile_id, dword_t user_index,
-                                 lpdword_t output_ptr,
-                                 lpdword_t buffer_size_ptr,
-                                 dword_t overlapped_ptr) {
-  // TODO: fully implement this.
-  if (!tile_id) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-  // Wrap function in a lambda func so we can use return to exit out when
-  // needed, but still always be able to set the xoverlapped value
-  // this way we don't need a bunch of if/else nesting to accomplish the same
-  auto main_fn = [tile_type, title_id, tile_id, user_index, output_ptr,
-                  buffer_size_ptr]() {
-    uint64_t image_id = tile_id;
-    uint8_t* data = nullptr;
-    size_t data_len = 0;
-    std::unique_ptr<MappedMemory> mmap;
-    if (!output_ptr || !buffer_size_ptr) {
-      return X_ERROR_FILE_NOT_FOUND;
-    }
-    *buffer_size_ptr = (uint32_t)data_len;
-    return X_ERROR_SUCCESS;
-  };
-  auto result = main_fn();
-  if (overlapped_ptr) {
-    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr, result);
-    return X_ERROR_IO_PENDING;
-  }
-  return result;
-}
-DECLARE_XAM_EXPORT1(XamReadTile, kUserProfiles, kStub);
-
-dword_result_t XamReadTileEx_entry(dword_t tile_type, dword_t game_id,
-                                   qword_t item_id, dword_t offset,
-                                   dword_t unk1, dword_t unk2,
-                                   lpdword_t output_ptr,
-                                   lpdword_t buffer_size_ptr) {
-  return XamReadTile_entry(tile_type, game_id, item_id, offset, output_ptr,
-                           buffer_size_ptr, 0);
-}
-DECLARE_XAM_EXPORT1(XamReadTileEx, kUserProfiles, kSketchy);
 
 dword_result_t XamReadTileToTexture_entry(dword_t unknown, dword_t title_id,
                                           qword_t tile_id, dword_t user_index,
@@ -1011,44 +784,6 @@ dword_result_t XamUserCreateStatsEnumerator_entry(
 }
 DECLARE_XAM_EXPORT1(XamUserCreateStatsEnumerator, kUserProfiles, kSketchy);
 
-dword_result_t XamProfileClose_entry(lpstring_t mount_name) {
-  std::string guest_name = mount_name;
-  bool result =
-      kernel_state()->file_system()->UnregisterDevice(guest_name + ':');
-
-  if (!result) {
-    return X_ERROR_FUNCTION_FAILED;
-  }
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamProfileClose, kUserProfiles, kStub);
-
-#pragma pack(push, 1)
-struct X_USER_INFO {
-  xe::be<uint64_t> xuid;
-  char name[16];
-  xe::be<uint32_t> user_index;
-  xe::be<uint32_t> unk;
-  xe::be<uint32_t> title_id;
-  xe::be<uint32_t> unk2;
-  xe::be<uint32_t> unk3;
-};
-static_assert_size(X_USER_INFO, 44);
-
-typedef struct {
-  xe::be<uint32_t> user_count;
-  X_USER_INFO users_info[7];
-} X_USER_PARTY_LIST;
-static_assert_size(X_USER_PARTY_LIST, 4 + sizeof(X_USER_INFO) * 7);
-#pragma pack(pop)
-
-dword_result_t XamPartyGetUserListInternal_entry(
-    pointer_t<X_USER_PARTY_LIST> party_struct_ptr) {
-  party_struct_ptr->user_count = 0;
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamPartyGetUserListInternal, kUserProfiles, kStub);
-
 dword_result_t XamProfileFindAccount_entry(qword_t offline_xuid,
                                            pointer_t<X_XAMACCOUNTINFO> account,
                                            lpdword_t device_id) {
@@ -1077,104 +812,6 @@ dword_result_t XamProfileFindAccount_entry(qword_t offline_xuid,
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamProfileFindAccount, kUserProfiles, kImplemented);
-
-dword_result_t XamIsSystemTitleId_entry(dword_t title_id) {
-  if (title_id == 0) {
-    return true;
-  }
-  if ((title_id & 0xFF000000) == 0x58000000u) {
-    return (title_id & 0xFF0000) != 0x410000;  // if 'X' but not 'XA' (XBLA)
-  }
-  return (title_id >> 16) == 0xFFFE;  // FFFExxxx are always system apps
-}
-DECLARE_XAM_EXPORT1(XamIsSystemTitleId, kMisc, kImplemented);
-
-dword_result_t XamIsXbox1TitleId_entry(dword_t title_id) {
-  if (title_id == 0xFFFE0000) {
-    return true;  // Xbox OG dashboard ID?
-  }
-  if (title_id == 0 || (title_id & 0xFF000000) == 0xFF000000) {
-    return false;  // X360 system apps
-  }
-  return (title_id & 0x7FFF) < 0x7D0;  // lower 15 bits smaller than 2000
-}
-DECLARE_XAM_EXPORT1(XamIsXbox1TitleId, kMisc, kImplemented);
-
-dword_result_t XamIsSystemExperienceTitleId_entry(dword_t title_id) {
-  if ((title_id >> 16) == 0x584A) {  // 'XJ'
-    return true;
-  }
-  if ((title_id >> 16) == 0x5848) {  // 'XH'
-    return true;
-  }
-  return title_id == 0x584E07D2 || title_id == 0x584E07D1;  // XN-2002 / XN-2001
-}
-DECLARE_XAM_EXPORT1(XamIsSystemExperienceTitleId, kMisc, kImplemented);
-
-dword_result_t XamFitnessClearBodyProfileRecords_entry(
-    unknown_t r3, unknown_t r4, unknown_t r5, unknown_t r6, unknown_t r7,
-    unknown_t r8, unknown_t r9) {
-  return X_STATUS_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamFitnessClearBodyProfileRecords, kMisc, kStub);
-dword_result_t XamSetLastActiveUserData_entry(unknown_t r3, unknown_t r4,
-                                              unknown_t r5, unknown_t r6,
-                                              unknown_t r7, unknown_t r8,
-                                              unknown_t r9) {
-  return X_STATUS_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamSetLastActiveUserData, kMisc, kStub);
-dword_result_t XamGetLastActiveUserData_entry(unknown_t r3, unknown_t r4,
-                                              unknown_t r5, unknown_t r6,
-                                              unknown_t r7, unknown_t r8,
-                                              unknown_t r9) {
-  return X_STATUS_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamGetLastActiveUserData, kMisc, kStub);
-dword_result_t XamPngDecode_entry(unknown_t r3, unknown_t r4, unknown_t r5,
-                                  unknown_t r6, unknown_t r7, unknown_t r8,
-                                  unknown_t r9) {
-  return X_STATUS_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamPngDecode, kMisc, kStub);
-dword_result_t XamPackageManagerGetExperienceMode_entry(
-    unknown_t r3, unknown_t r4, unknown_t r5, unknown_t r6, unknown_t r7,
-    unknown_t r8, unknown_t r9) {
-  return X_STATUS_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamPackageManagerGetExperienceMode, kMisc, kStub);
-dword_result_t XamGetLiveHiveValueW_entry(lpstring_t name, lpstring_t value,
-                                          dword_t ch_value, dword_t unk,
-                                          lpvoid_t overlapped_ptr) {
-  return X_STATUS_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamGetLiveHiveValueW, kMisc, kStub);
-
-// https://github.com/jogolden/testdev/blob/master/xkelib/xam/_xamext.h
-typedef enum {
-  XAM_DEFAULT_IMAGE_SYSTEM = 0x0,    // "xam"     "defaultsystemimage.png"
-  XAM_DEFAULT_IMAGE_DASHICON = 0x1,  // "xam"     "dashicon.png"
-  XAM_DEFAULT_IMAGE_SETTINGS = 0x2,  // "shrdres"   "ico_64x_licensestore.png"
-} XAM_DEFAULT_IMAGE_ID;
-
-X_HRESULT xeXGetDefaultImage(dword_t /*XAM_DEFAULT_IMAGE_ID*/ index,
-                             lpvoid_t image_source, lpdword_t image_len) {
-  XELOGD("Stubbed");
-  return X_ERROR_FUNCTION_FAILED;
-}
-
-dword_result_t XamGetDefaultSystemImage_entry(
-    lpvoid_t image_source,
-    lpdword_t image_len) {  // Gets "Defaultsystemimage.png"
-  return xeXGetDefaultImage(0, image_source, image_len);
-}
-DECLARE_XAM_EXPORT1(XamGetDefaultSystemImage, kMisc, kStub);
-
-dword_result_t XamGetDefaultImage_entry(dword_t index, lpvoid_t image_source,
-                                        lpdword_t image_len) {
-  return xeXGetDefaultImage(index, image_source, image_len);
-}
-DECLARE_XAM_EXPORT1(XamGetDefaultImage, kMisc, kStub);
 
 }  // namespace xam
 }  // namespace kernel
