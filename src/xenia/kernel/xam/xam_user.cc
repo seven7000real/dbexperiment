@@ -20,56 +20,11 @@
 #include "xenia/kernel/xthread.h"
 #include "xenia/xbox.h"
 
-#include <src/xenia/kernel/xam/xam_enum.cc>
-
 DECLARE_int32(user_language);
 
 namespace xe {
 namespace kernel {
 namespace xam {
-
-dword_result_t XamProfileOpen_entry(qword_t xuid, lpstring_t mount_name) {
-  std::string guest_name = mount_name;
-  bool result =
-      kernel_state()->xam_state()->profile_manager()->GetProfile(xuid);
-
-  if (!result) {
-    return X_ERROR_FUNCTION_FAILED;
-  }
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamProfileOpen, kUserProfiles, kStub);
-
-struct X_PROFILEENUMRESULT {
-  xe::be<uint64_t> xuid_offline;  // E0.....
-  X_XAMACCOUNTINFO account;
-  xe::be<uint32_t> device_id;
-};
-static_assert_size(X_PROFILEENUMRESULT, 0x188);
-
-dword_result_t XamProfileCreateEnumerator_entry(dword_t device_id,
-                                                lpdword_t handle_out) {
-  assert_not_null(handle_out);
-
-  auto e = new XStaticUntypedEnumerator(kernel_state(), 0,
-                                        sizeof(X_PROFILEENUMRESULT));
-
-  e->Initialize(0xFF, 0xFF, 0x23001, 0x23003, 0x28);
-
-  *handle_out = e->handle();
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamProfileCreateEnumerator, kUserProfiles, kStub);
-
-dword_result_t XamProfileEnumerate_entry(dword_t handle, dword_t flags,
-                                         lpvoid_t buffer,
-                                         pointer_t<XAM_OVERLAPPED> overlapped) {
-  uint32_t dummy;
-  auto result = xe::kernel::xam::xeXamEnumerate(handle, flags, buffer, 0,
-                               !overlapped ? &dummy : nullptr, overlapped);
-  return result;
-}
-DECLARE_XAM_EXPORT1(XamProfileEnumerate, kUserProfiles, kSketchy);
 
 X_HRESULT_result_t XamUserGetXUID_entry(dword_t user_index, dword_t type_mask,
                                         lpqword_t xuid_ptr) {
@@ -547,31 +502,6 @@ DECLARE_XAM_EXPORT1(XamUserContentRestrictionCheckAccess, kUserProfiles, kStub);
 dword_result_t XamUserIsOnlineEnabled_entry(dword_t user_index) { return 1; }
 DECLARE_XAM_EXPORT1(XamUserIsOnlineEnabled, kUserProfiles, kStub);
 
-dword_result_t XamUserLogon_entry(lpqword_t xuid, dword_t unk,
-                                  dword_t overlapped_ptr) {
-  uint64_t profile_xuid = *xuid;
-
-  auto run = [profile_xuid](uint32_t& extended_error,
-                            uint32_t& length) -> X_RESULT {
-    // kernel_state()->profile_manager()->Login(profile_xuid); // log in to
-    // profile and swap account data
-    extended_error = 0;
-    length = 0;
-    return X_ERROR_SUCCESS;
-  };
-
-  if (overlapped_ptr) {
-    kernel_state()->CompleteOverlappedDeferredEx(run, overlapped_ptr);
-    return X_ERROR_IO_PENDING;
-  } else {
-    uint32_t extended_error;
-    uint32_t item_count;
-    X_RESULT result = run(extended_error, item_count);
-  }
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamUserLogon, kUserProfiles, kStub);
-
 dword_result_t XamUserGetMembershipTier_entry(dword_t user_index) {
   if (user_index >= XUserMaxUserCount) {
     return X_ERROR_INVALID_PARAMETER;
@@ -583,12 +513,6 @@ dword_result_t XamUserGetMembershipTier_entry(dword_t user_index) {
   return 6 /* 6 appears to be Gold */;
 }
 DECLARE_XAM_EXPORT1(XamUserGetMembershipTier, kUserProfiles, kStub);
-
-// https://answers.microsoft.com/en-us/xbox/forum/all/what-does-the-tenure-mean/07793391-78af-4709-b54a-5adf4366be7e
-dword_result_t XamUserGetUserTenure_entry() {
-  return 0xC; /* Development for Xenia Started in 2013 (11 yrs)*/
-}
-DECLARE_XAM_EXPORT1(XamUserGetUserTenure, kUserProfiles, kStub);
 
 dword_result_t XamUserAreUsersFriends_entry(dword_t user_index, dword_t unk1,
                                             dword_t unk2, lpdword_t out_value,
@@ -709,58 +633,6 @@ dword_result_t XamParseGamerTileKey_entry(lpdword_t key_ptr, lpdword_t out1_ptr,
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamParseGamerTileKey, kUserProfiles, kStub);
-
-// https://github.com/xenia-canary/xenia-canary/blob/new_dashboard_run/src/xenia/kernel/xam/xam_user.cc
-dword_result_t XamReadTile_entry(dword_t tile_type, dword_t title_id,
-                                 qword_t tile_id, dword_t user_index,
-                                 lpdword_t output_ptr,
-                                 lpdword_t buffer_size_ptr,
-                                 dword_t overlapped_ptr) {
-  // TODO: fully implement this.
-  if (!tile_id) {
-    return X_ERROR_INVALID_PARAMETER;
-  }
-  // Wrap function in a lambda func so we can use return to exit out when
-  // needed, but still always be able to set the xoverlapped value
-  // this way we don't need a bunch of if/else nesting to accomplish the same
-  auto main_fn = [tile_type, title_id, tile_id, user_index, output_ptr,
-                  buffer_size_ptr]() {
-    uint64_t image_id = tile_id;
-    uint8_t* data = nullptr;
-    size_t data_len = 0;
-    std::unique_ptr<MappedMemory> mmap;
-    if (!output_ptr || !buffer_size_ptr) {
-      return X_ERROR_FILE_NOT_FOUND;
-    }
-    *buffer_size_ptr = (uint32_t)data_len;
-    return X_ERROR_SUCCESS;
-  };
-  auto result = main_fn();
-  if (overlapped_ptr) {
-    kernel_state()->CompleteOverlappedImmediate(overlapped_ptr, result);
-    return X_ERROR_IO_PENDING;
-  }
-  return result;
-}
-DECLARE_XAM_EXPORT1(XamReadTile, kUserProfiles, kStub);
-
-dword_result_t XamReadTileEx_entry(dword_t tile_type, dword_t game_id,
-                                   qword_t item_id, dword_t offset,
-                                   dword_t unk1, dword_t unk2,
-                                   lpdword_t output_ptr,
-                                   lpdword_t buffer_size_ptr) {
-  return XamReadTile_entry(tile_type, game_id, item_id, offset, output_ptr,
-                           buffer_size_ptr, 0);
-}
-DECLARE_XAM_EXPORT1(XamReadTileEx, kUserProfiles, kSketchy);
-
-dword_result_t XamUserCreateTitlesPlayedEnumerator_entry(
-    dword_t user_index, dword_t xuid, dword_t flags, dword_t offset,
-    dword_t games_count, lpdword_t buffer_size_ptr, lpdword_t handle_ptr) {
-  // TODO: implement this.
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamUserCreateTitlesPlayedEnumerator, kUserProfiles, kStub);
 
 dword_result_t XamReadTileToTexture_entry(dword_t unknown, dword_t title_id,
                                           qword_t tile_id, dword_t user_index,
@@ -912,43 +784,34 @@ dword_result_t XamUserCreateStatsEnumerator_entry(
 }
 DECLARE_XAM_EXPORT1(XamUserCreateStatsEnumerator, kUserProfiles, kSketchy);
 
-dword_result_t XamProfileClose_entry(lpstring_t mount_name) {
-  std::string guest_name = mount_name;
-  bool result =
-      kernel_state()->file_system()->UnregisterDevice(guest_name + ':');
-
-  if (!result) {
-    return X_ERROR_FUNCTION_FAILED;
+dword_result_t XamProfileFindAccount_entry(qword_t offline_xuid,
+                                           pointer_t<X_XAMACCOUNTINFO> account,
+                                           lpdword_t device_id) {
+  if (!account) {
+    return X_ERROR_INVALID_PARAMETER;
   }
+
+  account.Zero();
+
+  const auto& profiles =
+      kernel_state()->xam_state()->profile_manager()->GetProfiles();
+
+  if (!profiles->count(offline_xuid)) {
+    return X_ERROR_NO_SUCH_USER;
+  }
+
+  memcpy(account, &profiles->at(offline_xuid), sizeof(X_XAMACCOUNTINFO));
+
+  xe::string_util::copy_and_swap_truncating(
+      account->gamertag, account->gamertag, sizeof(account->gamertag));
+
+  if (device_id) {
+    *device_id = 1;
+  }
+
   return X_ERROR_SUCCESS;
 }
-DECLARE_XAM_EXPORT1(XamProfileClose, kUserProfiles, kStub);
-
-#pragma pack(push, 1)
-struct X_USER_INFO {
-  xe::be<uint64_t> xuid;
-  char name[16];
-  xe::be<uint32_t> user_index;
-  xe::be<uint32_t> unk;
-  xe::be<uint32_t> title_id;
-  xe::be<uint32_t> unk2;
-  xe::be<uint32_t> unk3;
-};
-static_assert_size(X_USER_INFO, 44);
-
-typedef struct {
-  xe::be<uint32_t> user_count;
-  X_USER_INFO users_info[7];
-} X_USER_PARTY_LIST;
-static_assert_size(X_USER_PARTY_LIST, 4 + sizeof(X_USER_INFO) * 7);
-#pragma pack(pop)
-
-dword_result_t XamPartyGetUserListInternal_entry(
-    pointer_t<X_USER_PARTY_LIST> party_struct_ptr) {
-  party_struct_ptr->user_count = 0;
-  return X_ERROR_SUCCESS;
-}
-DECLARE_XAM_EXPORT1(XamPartyGetUserListInternal, kUserProfiles, kStub);
+DECLARE_XAM_EXPORT1(XamProfileFindAccount, kUserProfiles, kImplemented);
 
 }  // namespace xam
 }  // namespace kernel
