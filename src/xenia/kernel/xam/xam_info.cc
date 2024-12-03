@@ -333,7 +333,6 @@ dword_result_t XamLoaderGetLaunchDataSize_entry(lpdword_t size_ptr) {
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamLoaderGetLaunchDataSize, kNone, kSketchy);
-
 dword_result_t XamLoaderGetLaunchData_entry(lpvoid_t buffer_ptr,
                                             dword_t buffer_size) {
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
