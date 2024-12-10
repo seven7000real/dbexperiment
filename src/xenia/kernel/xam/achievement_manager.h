@@ -11,11 +11,9 @@
 #define XENIA_KERNEL_XAM_ACHIEVEMENT_MANAGER_H_
 
 #include <map>
-#include <optional>
 #include <string>
 #include <vector>
 
-#include "xenia/base/chrono.h"
 #include "xenia/kernel/util/xdbf_utils.h"
 #include "xenia/xbox.h"
 
@@ -23,63 +21,9 @@ namespace xe {
 namespace kernel {
 namespace xam {
 
-enum class AchievementType : uint32_t {
-  kCompletion = 1,
-  kLeveling = 2,
-  kUnlock = 3,
-  kEvent = 4,
-  kTournament = 5,
-  kCheckpoint = 6,
-  kOther = 7,
-};
-
-enum class AchievementPlatform : uint32_t {
-  kX360 = 0x100000,
-  kPC = 0x200000,
-  kMobile = 0x300000,
-  kWebGames = 0x400000,
-};
-
-enum class AchievementFlags : uint32_t {
-  kTypeMask = 0x7,
-  kShowUnachieved = 0x8,
-  kAchievedOnline = 0x10000,
-  kAchieved = 0x20000,
-  kNotAchievable = 0x40000,
-  kWasNotAchievable = 0x80000,
-  kPlatformMask = 0x700000,
-  kColorizable = 0x1000000,  // avatar awards only?
-};
-
 struct X_ACHIEVEMENT_UNLOCK_TIME {
   xe::be<uint32_t> high_part;
   xe::be<uint32_t> low_part;
-
-  X_ACHIEVEMENT_UNLOCK_TIME() {
-    high_part = 0;
-    low_part = 0;
-  }
-
-  X_ACHIEVEMENT_UNLOCK_TIME(uint64_t filetime) {
-    high_part = static_cast<uint32_t>(filetime >> 32);
-    low_part = static_cast<uint32_t>(filetime);
-  }
-
-  X_ACHIEVEMENT_UNLOCK_TIME(std::time_t time) {
-    const auto file_time =
-        chrono::WinSystemClock::to_file_time(chrono::WinSystemClock::from_sys(
-            std::chrono::system_clock::from_time_t(time)));
-
-    high_part = static_cast<uint32_t>(file_time >> 32);
-    low_part = static_cast<uint32_t>(file_time);
-  }
-
-  chrono::WinSystemClock::time_point to_time_point() const {
-    const uint64_t filetime =
-        (static_cast<uint64_t>(high_part) << 32) | low_part;
-
-    return chrono::WinSystemClock::from_file_time(filetime);
-  }
 };
 
 struct X_ACHIEVEMENT_DETAILS {
@@ -137,17 +81,34 @@ struct AchievementGpdStructure {
   std::u16string achievement_name;
   std::u16string unlocked_description;
   std::u16string locked_description;
-
-  bool IsUnlocked() const {
-    return (flags & static_cast<uint32_t>(AchievementFlags::kAchieved)) ||
-           flags & static_cast<uint32_t>(AchievementFlags::kAchievedOnline);
-  }
 };
 
-struct TitleAchievementsProfileInfo {
-  uint32_t achievements_count;
-  uint32_t unlocked_achievements_count;
-  uint32_t gamerscore;
+enum class AchievementType : uint32_t {
+  kCompletion = 1,
+  kLeveling = 2,
+  kUnlock = 3,
+  kEvent = 4,
+  kTournament = 5,
+  kCheckpoint = 6,
+  kOther = 7,
+};
+
+enum class AchievementPlatform : uint32_t {
+  kX360 = 0x100000,
+  kPC = 0x200000,
+  kMobile = 0x300000,
+  kWebGames = 0x400000,
+};
+
+enum class AchievementFlags : uint32_t {
+  kTypeMask = 0x7,
+  kShowUnachieved = 0x8,
+  kAchievedOnline = 0x10000,
+  kAchieved = 0x20000,
+  kNotAchievable = 0x40000,
+  kWasNotAchievable = 0x80000,
+  kPlatformMask = 0x700000,
+  kColorizable = 0x1000000,  // avatar awards only?
 };
 
 class AchievementBackendInterface {
@@ -176,6 +137,36 @@ class AchievementBackendInterface {
                                    const uint32_t achievement_id) = 0;
 };
 
+class GpdAchievementBackend : public AchievementBackendInterface {
+ public:
+  GpdAchievementBackend();
+  ~GpdAchievementBackend();
+
+  void EarnAchievement(const uint64_t xuid, const uint32_t title_id,
+                       const uint32_t achievement_id) override;
+  bool IsAchievementUnlocked(const uint64_t xuid, const uint32_t title_id,
+                             const uint32_t achievement_id) const override;
+  const AchievementGpdStructure* GetAchievementInfo(
+      const uint64_t xuid, const uint32_t title_id,
+      const uint32_t achievement_id) const override;
+  const std::vector<AchievementGpdStructure>* GetTitleAchievements(
+      const uint64_t xuid, const uint32_t title_id) const override;
+  bool LoadAchievementsData(const uint64_t xuid,
+                            const util::XdbfGameData title_data) override;
+
+ private:
+  AchievementGpdStructure* GetAchievementInfoInternal(
+      const uint64_t xuid, const uint32_t title_id,
+      const uint32_t achievement_id) const;
+
+  bool SaveAchievementsData(const uint64_t xuid,
+                            const uint32_t title_id) override {
+    return 0;
+  };
+  bool SaveAchievementData(const uint64_t xuid, const uint32_t title_id,
+                           const uint32_t achievement_id) override;
+};
+
 class AchievementManager {
  public:
   AchievementManager();
@@ -191,8 +182,6 @@ class AchievementManager {
       const uint64_t xuid, const uint32_t title_id,
       const uint32_t achievement_id) const;
   const std::vector<AchievementGpdStructure>* GetTitleAchievements(
-      const uint64_t xuid, const uint32_t title_id) const;
-  const std::optional<TitleAchievementsProfileInfo> GetTitleAchievementsInfo(
       const uint64_t xuid, const uint32_t title_id) const;
 
  private:
