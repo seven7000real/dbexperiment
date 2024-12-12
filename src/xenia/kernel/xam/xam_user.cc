@@ -476,7 +476,7 @@ dword_result_t XamUserWriteProfileSettings_entry(
         "XamUserWriteProfileSettings: setting index [{}]:"
         " from={} setting_id={:08X} data.type={}",
         n, (uint32_t)setting.from, (uint32_t)setting.setting_id,
-        setting.data.type);
+        static_cast<uint32_t>(setting.data.type));
 
     switch (setting_type) {
       case X_USER_DATA_TYPE::CONTENT:
@@ -509,7 +509,7 @@ dword_result_t XamUserWriteProfileSettings_entry(
       case X_USER_DATA_TYPE::DATETIME:
       default: {
         XELOGE("XamUserWriteProfileSettings: Unimplemented data type {}",
-               setting_type);
+               static_cast<uint32_t>(setting_type));
       } break;
     };
   }
