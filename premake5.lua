@@ -26,7 +26,7 @@ defines({
   "UNICODE",
 })
 
-cppdialect("C++20")
+cppdialect("C++17")
 exceptionhandling("On")
 rtti("On")
 symbols("On")
@@ -65,6 +65,7 @@ filter({"configurations:Checked", "platforms:Linux"})
 filter({"configurations:Release", "platforms:Windows"})
   buildoptions({
     "/Gw",
+    "/GS-",
     "/Ob3",
   })
 
@@ -90,7 +91,6 @@ filter("configurations:Release")
   inlining("Auto")
   flags({
     "LinkTimeOptimization",
-    "NoBufferSecurityCheck",
   })
   -- Not using floatingpoint("Fast") - NaN checks are used in some places
   -- (though rarely), overall preferable to avoid any functional differences
@@ -140,7 +140,6 @@ filter({"platforms:Linux", "language:C++", "toolset:clang"})
 filter({"platforms:Linux", "language:C++", "toolset:clang", "files:*.cc or *.cpp"})
   buildoptions({
     "-stdlib=libstdc++",
-    "-std=c++20", -- clang doesn't respect cppdialect(?)
   })
 
 filter("platforms:Android-*")
