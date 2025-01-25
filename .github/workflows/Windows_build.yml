@@ -9,6 +9,7 @@ on:
       - '.gitignore'
       - '.gdbinit'
       - '.github/*'
+      - '.github/workflows/Linux_build.yml'
       - '.github/*_TEMPLATE/**'
       - '*.md'
       - '*.yml'
@@ -30,6 +31,7 @@ on:
       - '.gitignore'
       - '.gdbinit'
       - '.github/*'
+      - '.github/workflows/Linux_build.yml'
       - '.github/*_TEMPLATE/**'
       - '*.md'
       - '*.yml'
@@ -71,37 +73,28 @@ jobs:
       - name: Build
         run: .\xb build --config=Release --target=src\xenia-app
       - name: Prepare artifacts
+        id: prepare_artifacts
         run: |
-          robocopy . build\bin\${{ runner.os }}\Release                                                                LICENSE /r:0 /w:0
-          robocopy   build\bin\${{ runner.os }}\Release artifacts\xenia_canary   xenia_canary.exe   xenia_canary.pdb   LICENSE /r:0 /w:0
+          robocopy . build\bin\Windows\Release                                                                LICENSE /r:0 /w:0
+          robocopy   build\bin\Windows\Release artifacts\xenia_canary   xenia_canary.exe   xenia_canary.pdb   LICENSE /r:0 /w:0
           If ($LastExitCode -le 7) { echo "LastExitCode = $LastExitCode";$LastExitCode = 0 }
       - name: Upload xenia canary artifacts
+        if: steps.prepare_artifacts.outcome == 'success'
         uses: actions/upload-artifact@main
         with:
           name: xenia_canary_windows
           path: artifacts\xenia_canary
           if-no-files-found: error
-      - name: Create release
-        if: |
-          github.repository == 'xenia-canary/xenia-canary' &&
-          github.event.action != 'pull_request' &&
-          github.ref == 'refs/heads/canary_experimental'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $asset="xenia_canary.zip"
-          rm -recurse -force artifacts\xenia_canary\*.pdb # Ideally this would use xr, but I can't get it to work
-          7z a $asset .\artifacts\xenia_canary\*
-          If ($(Get-Item $asset).length -le 100000) {
-            Throw "Error: Archive $asset too small!"
-          }
-          $tag=$env:GITHUB_SHA.SubString(0,7)
-          $branch=$($env:GITHUB_REF -replace 'refs/heads/')
-          $title="${tag}_$branch"
-          gh release create $tag $asset --target $env:GITHUB_SHA -t $title
-          # Remove canary_ to prevent conflicts from tag
-          $tag=$($branch -replace 'canary_')
-          gh release delete $tag -y
-          git push --delete origin $tag
-          git tag -d $tag
-          gh release create $tag $asset --target $env:GITHUB_SHA -t $branch
+
+  create-release:
+    name: Create release
+    needs: [lint, build]
+    if: |
+      github.repository == 'xenia-canary/xenia-canary' &&
+      github.event.action != 'pull_request' &&
+      github.ref == 'refs/heads/canary_experimental'
+    uses: ./.github/workflows/Create_release.yml
+    with:
+      os: windows
+    secrets:
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
