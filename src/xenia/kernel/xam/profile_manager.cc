@@ -183,8 +183,8 @@ bool ProfileManager::LoadAccount(const uint64_t xuid) {
 
   MountProfile(xuid);
 
-    const std::string guest_path = "DASHUSER:\\" + xuid_as_string + "\\Account";
-  XELOGI("{}", guest_path);
+  const std::string guest_path =
+      fmt::format(kDefaultMountFormat, xuid) + ":\\Account";
 
   xe::vfs::File* output_file;
   xe::vfs::FileAction action = {};
@@ -255,10 +255,12 @@ void ProfileManager::ModifyGamertag(const uint64_t xuid, std::string gamertag) {
   DismountProfile(xuid);
 }
 
-bool ProfileManager::MountProfile(const uint64_t xuid) {
+bool ProfileManager::MountProfile(const uint64_t xuid, std::string mount_path) {
   std::filesystem::path profile_path = GetProfilePath(xuid);
-  const std::string xuid_as_string = fmt::format("{:016X}", xuid);
-  std::string mount_path = "DASHUSER:\\" + xuid_as_string;
+  if (mount_path.empty()) {
+    mount_path = fmt::format(kDefaultMountFormat, xuid);
+  }
+  mount_path += ':';
 
   auto device =
       std::make_unique<vfs::HostPathDevice>(mount_path, profile_path, false);
@@ -273,9 +275,8 @@ bool ProfileManager::MountProfile(const uint64_t xuid) {
 }
 
 bool ProfileManager::DismountProfile(const uint64_t xuid) {
-  const std::string xuid_as_string = fmt::format("{:016X}", xuid);
-  return kernel_state_->file_system()->UnregisterDevice("DASHUSER:\\" +
-                                                        xuid_as_string);
+  return kernel_state_->file_system()->UnregisterDevice(
+      fmt::format(kDefaultMountFormat, xuid) + ':');
 }
 
 void ProfileManager::Login(const uint64_t xuid, const uint8_t user_index,
