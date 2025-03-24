@@ -37,6 +37,30 @@ namespace xe {
 namespace kernel {
 namespace xam {
 
+dword_result_t XamPackageManagerFindPackageContainingIndexedXEX_entry(
+    dword_t param1, dword_t param2, dword_t param3, dword_t param4,
+    dword_t param5, dword_t param6) {
+  XELOGI(
+      "XamPackageManagerFindPackageContainingIndexedXEX({}, {}, {}, {}, {}, "
+      "{})",
+      param1.value(), param2.value(), param3.value(), param4.value(),
+      param5.value(), param6.value());
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT2(XamPackageManagerFindPackageContainingIndexedXEX, kContent,
+                    kStub, kHighFrequency);
+dword_result_t XdfLoadXexFromCache_entry(dword_t param1, dword_t param2,
+                                         dword_t param3, lpdword_t param4) {
+  XELOGI("XdfLoadXexFromCache({}, {}, {}, {})", param1.value(), param2.value(),
+         param3.value(), param4.value());
+  if (!param1 || !param4 || !param2) {
+    return X_E_INVALIDARG;
+  }
+  *param4 = 0;
+  return X_ERROR_SUCCESS;
+}
+DECLARE_XAM_EXPORT2(XdfLoadXexFromCache, kContent, kStub, kHighFrequency);
+
 dword_result_t XamContentGetLicenseMask_entry(lpdword_t mask_ptr,
                                               lpvoid_t overlapped_ptr) {
   if (!mask_ptr) {

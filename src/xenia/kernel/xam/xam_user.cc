@@ -29,10 +29,9 @@ namespace kernel {
 namespace xam {
 
 dword_result_t XamProfileOpen_entry(qword_t xuid, lpstring_t mount_name) {
-  std::string guest_name = mount_name;
+  // We ignore the mount as DASHUSER is Content folder.
   bool result =
-      kernel_state()->xam_state()->profile_manager()->GetProfile(xuid);
-
+      kernel_state()->xam_state()->profile_manager()->MountProfile(xuid);
   if (!result) {
     return X_ERROR_FUNCTION_FAILED;
   }
@@ -1143,6 +1142,11 @@ dword_result_t XamGetDefaultImage_entry(dword_t index, lpvoid_t image_source,
   return xeXGetDefaultImage(index, image_source, image_len);
 }
 DECLARE_XAM_EXPORT1(XamGetDefaultImage, kMisc, kStub);
+
+dword_result_t XamUserIsGuest_entry(dword_t user_index) {
+  return X_E_SUCCESS;
+}
+DECLARE_XAM_EXPORT1(XamUserIsGuest, kMisc, kStub);
 
 }  // namespace xam
 }  // namespace kernel

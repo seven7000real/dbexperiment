@@ -1423,6 +1423,48 @@ dword_result_t XamShowCreateProfileUI_entry(dword_t user_index, dword_t unkn) {
 }
 DECLARE_XAM_EXPORT1(XamShowCreateProfileUI, kUserProfiles, kImplemented);
 
+void XamBackgroundDownloadHistoryGetItem_entry() {
+  if (cvars::headless) {
+    assert_always();
+    exit(1);
+    return;
+  }
+
+  std::string title = "Xbox Marketplace";
+  std::string desc =
+      "Since Xenia is unable to access Xbox Live Marketplace, \nThis function "
+      "is unavailable. For any online related tasks, please use Xenia Netplay.";
+
+  const Emulator* emulator = kernel_state()->emulator();
+  ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+  xeXamDispatchDialog<MessageBoxDialog>(
+      new MessageBoxDialog(imgui_drawer, title, desc, {"OK"}, 0),
+      [](MessageBoxDialog*) -> X_RESULT { return X_ERROR_SUCCESS; }, 0);
+  exit(1);
+}
+DECLARE_XAM_EXPORT1(XamBackgroundDownloadHistoryGetItem, kMisc, kStub);
+
+void XamShowPersonalizationUI_entry(dword_t user_index) {
+  if (cvars::headless) {
+    assert_always();
+    exit(1);
+    return;
+  }
+
+  std::string title = "Theme Selection UI";
+  std::string desc =
+      "Xenia is currently not able to switch or install themes,\n"
+      "therefore the theme selection is not available.";
+
+  const Emulator* emulator = kernel_state()->emulator();
+  ui::ImGuiDrawer* imgui_drawer = emulator->imgui_drawer();
+  xeXamDispatchDialog<MessageBoxDialog>(
+      new MessageBoxDialog(imgui_drawer, title, desc, {"OK"}, 0),
+      [](MessageBoxDialog*) -> X_RESULT { return X_ERROR_SUCCESS; }, 0);
+  exit(1);
+}
+DECLARE_XAM_EXPORT1(XamShowPersonalizationUI, kUI, kStub);
+
 }  // namespace xam
 }  // namespace kernel
 }  // namespace xe

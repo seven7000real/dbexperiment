@@ -398,9 +398,46 @@ void XamLoaderLaunchTitle_entry(lpstring_t raw_name_ptr, dword_t flags) {
 }
 DECLARE_XAM_EXPORT1(XamLoaderLaunchTitle, kNone, kSketchy);
 
-// https://www.se7ensins.com/forums/threads/interested-in-programming-here-are-some-tips.1503852/
 void XamLoaderLaunchTitleEx_entry(lpstring_t launch_path, lpstring_t mount_path,
-                                  lpstring_t cmdLine, dword_t flags) {}
+                                  lpstring_t cmdLine, dword_t flags) {
+  auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
+
+  auto& loader_data = xam->loader_data();
+  loader_data.launch_flags = flags;
+
+  // Translate the launch path to a full path.
+  if (launch_path) {
+    auto path = launch_path.value();
+    if (path.empty()) {
+      loader_data.launch_path = "game:\\default.xex";
+    } else {
+      loader_data.launch_path = xe::path_to_utf8(path);
+      loader_data.launch_data_present = true;
+    }
+
+    xam->SaveLoaderData();
+
+    if (loader_data.launch_data_present) {
+      auto display_window = kernel_state()->emulator()->display_window();
+      auto imgui_drawer = kernel_state()->emulator()->imgui_drawer();
+
+      if (display_window && imgui_drawer) {
+        display_window->app_context().CallInUIThreadSynchronous(
+            [imgui_drawer]() {
+              xe::ui::ImGuiDialog::ShowMessageBox(
+                  imgui_drawer, "Title was restarted",
+                  "Title closed with new launch data. \nPlease restart Xenia. "
+                  "Game will be loaded automatically.");
+            });
+      }
+    }
+  } else {
+    assert_always("Game requested exit to dashboard via XamLoaderLaunchTitleEx");
+  }
+  if (loader_data.launch_data_present) {
+    loader_data.launch_path = "game:\\dash.xex";
+  }
+}
 DECLARE_XAM_EXPORT1(XamLoaderLaunchTitleEx, kNone, kSketchy);
 
 void XamLoaderTerminateTitle_entry() {
