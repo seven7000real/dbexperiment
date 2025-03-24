@@ -182,7 +182,8 @@ bool ProfileManager::LoadAccount(const uint64_t xuid) {
 
   MountProfile(xuid);
 
-  const std::string guest_path = xuid_as_string + ":\\Account";
+    const std::string guest_path = "DASHUSER:\\" + xuid_as_string + "\\Account";
+  XELOGI("{}", guest_path);
 
   xe::vfs::File* output_file;
   xe::vfs::FileAction action = {};
@@ -253,12 +254,10 @@ void ProfileManager::ModifyGamertag(const uint64_t xuid, std::string gamertag) {
   DismountProfile(xuid);
 }
 
-bool ProfileManager::MountProfile(const uint64_t xuid, std::string mount_path) {
+bool ProfileManager::MountProfile(const uint64_t xuid) {
   std::filesystem::path profile_path = GetProfilePath(xuid);
-  if (mount_path.empty()) {
-    mount_path = fmt::format("{:016X}", xuid);
-  }
-  mount_path += ':';
+  const std::string xuid_as_string = fmt::format("{:016X}", xuid);
+  std::string mount_path = "DASHUSER:\\" + xuid_as_string;
 
   auto device =
       std::make_unique<vfs::HostPathDevice>(mount_path, profile_path, false);
@@ -266,15 +265,16 @@ bool ProfileManager::MountProfile(const uint64_t xuid, std::string mount_path) {
     XELOGE(
         "MountProfile: Unable to mount {} profile; file not found or "
         "corrupted.",
-        profile_path);
+        xe::path_to_utf8(profile_path));
     return false;
   }
   return kernel_state_->file_system()->RegisterDevice(std::move(device));
 }
 
 bool ProfileManager::DismountProfile(const uint64_t xuid) {
-  return kernel_state_->file_system()->UnregisterDevice(
-      fmt::format("{:016X}", xuid) + ':');
+  const std::string xuid_as_string = fmt::format("{:016X}", xuid);
+  return kernel_state_->file_system()->UnregisterDevice("DASHUSER:\\" +
+                                                        xuid_as_string);
 }
 
 void ProfileManager::Login(const uint64_t xuid, const uint8_t user_index,
@@ -317,17 +317,8 @@ void ProfileManager::Login(const uint64_t xuid, const uint8_t user_index,
 
   logged_profiles_[assigned_user_slot] =
       std::make_unique<UserProfile>(xuid, &profile);
-
-  if (kernel_state_->emulator()->is_title_open()) {
-    const kernel::util::XdbfGameData db = kernel_state_->title_xdbf();
-    if (db.is_valid()) {
-      kernel_state_->xam_state()->achievement_manager()->LoadTitleAchievements(
-          xuid, db);
-    }
-  }
-
   if (notify) {
-    kernel_state_->BroadcastNotification(kXNotificationSystemSignInChanged,
+    kernel_state_->BroadcastNotification(kXNotificationIDSystemSignInChanged,
                                          GetUsedUserSlots().to_ulong());
   }
   UpdateConfig(xuid, assigned_user_slot);
@@ -341,7 +332,7 @@ void ProfileManager::Logout(const uint8_t user_index, bool notify) {
   DismountProfile(profile->second->xuid());
   logged_profiles_.erase(profile);
   if (notify) {
-    kernel_state_->BroadcastNotification(kXNotificationSystemSignInChanged,
+    kernel_state_->BroadcastNotification(kXNotificationIDSystemSignInChanged,
                                          GetUsedUserSlots().to_ulong());
   }
   UpdateConfig(0, user_index);
@@ -355,7 +346,7 @@ void ProfileManager::LoginMultiple(
     slots_mask |= (1 << slot);
   }
 
-  kernel_state_->BroadcastNotification(kXNotificationSystemSignInChanged,
+  kernel_state_->BroadcastNotification(kXNotificationIDSystemSignInChanged,
                                        slots_mask);
 }
 
@@ -376,9 +367,7 @@ std::vector<uint64_t> ProfileManager::FindProfiles() const {
 
     if (!std::filesystem::exists(
             profile.path / profile.name / kDashboardStringID /
-            fmt::format("{:08X}",
-                        static_cast<uint32_t>(XContentType::kProfile)) /
-            profile.name)) {
+            fmt::format("{:08X}", XContentType::kProfile) / profile.name)) {
       XELOGE("Profile {} doesn't have profile package!", profile_xuid);
       continue;
     }
@@ -407,7 +396,7 @@ uint8_t ProfileManager::FindFirstFreeProfileSlot() const {
       return i;
     }
   }
-  return XUserIndexAny;
+  return -1;
 }
 
 std::bitset<XUserMaxUserCount> ProfileManager::GetUsedUserSlots() const {
@@ -436,7 +425,7 @@ uint8_t ProfileManager::GetUserIndexAssignedToProfile(
 
     return index;
   }
-  return XUserIndexAny;
+  return -1;
 }
 
 std::filesystem::path ProfileManager::GetProfileContentPath(
@@ -458,8 +447,7 @@ std::filesystem::path ProfileManager::GetProfilePath(
 std::filesystem::path ProfileManager::GetProfilePath(
     const std::string xuid) const {
   return kernel_state_->emulator()->content_root() / xuid / kDashboardStringID /
-         fmt::format("{:08X}", static_cast<uint32_t>(XContentType::kProfile)) /
-         xuid;
+         fmt::format("{:08X}", XContentType::kProfile) / xuid;
 }
 
 bool ProfileManager::CreateProfile(const std::string gamertag, bool autologin,
@@ -479,14 +467,6 @@ bool ProfileManager::CreateProfile(const std::string gamertag, bool autologin,
     Login(xuid);
   }
   return is_account_created;
-}
-
-const X_XAMACCOUNTINFO* ProfileManager::GetAccount(const uint64_t xuid) {
-  if (!accounts_.count(xuid)) {
-    return nullptr;
-  }
-
-  return &accounts_[xuid];
 }
 
 bool ProfileManager::CreateAccount(const uint64_t xuid,

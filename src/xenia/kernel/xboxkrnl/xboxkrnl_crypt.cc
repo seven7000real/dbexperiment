@@ -774,6 +774,26 @@ void XeCryptHmacSha_entry(lpvoid_t key, dword_t key_size_in, lpvoid_t inp_1,
 }
 DECLARE_XBOXKRNL_EXPORT1(XeCryptHmacSha, kNone, kImplemented);
 
+dword_result_t XeKeysGetConsoleID_entry(lpvoid_t raw_bytes,
+                                        lpstring_t hex_string) {
+  if (hex_string) {
+    std::string key = "245149100000\0\0";
+    strncpy(hex_string, key.c_str(), key.length());
+  }
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(XeKeysGetConsoleID, kNone, kImplemented);
+
+dword_result_t XeKeysGetKey_entry(lpvoid_t raw_bytes,
+                                        lpstring_t hex_string) {
+  if (hex_string) {
+    std::string key = "245149100000\0\0";
+    strncpy(hex_string, key.c_str(), key.length());
+  }
+  return X_STATUS_SUCCESS;
+}
+DECLARE_XBOXKRNL_EXPORT1(XeKeysGetKey, kNone, kImplemented);
+
 // Keys
 // TODO: Array of keys we need
 
